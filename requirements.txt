@@ -1,1 +1,6 @@
-
+fastapi==0.110.0
+uvicorn==0.28.0
+pandas==2.2.1
+pandas-ta==0.3.14b0
+duckdb==0.10.1
+requests==2.31.0
