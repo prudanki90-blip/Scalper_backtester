@@ -415,12 +415,27 @@ with st.sidebar:
 
 uploaded = None
 
+
+uploaded = None
+
 if source == "Upload CSV":
-    uploaded = st.file_uploader(
-        "Upload candle CSV",
-        type=["csv"],
-        help="Required columns: timestamp, open, high, low, close",
+    st.subheader("Import your candle data")
+    st.write(
+        "Choose a CSV file from your phone. "
+        "Required columns: timestamp, open, high, low, close."
     )
+
+    uploaded = st.file_uploader(
+        "Browse your device for a CSV file",
+        type=["csv"],
+        key="scalper_csv_upload",
+        help="Select a CSV file containing historical candle data.",
+        label_visibility="visible",
+    )
+
+    if uploaded is not None:
+        st.success(f"Selected file: {uploaded.name}")
+        
 
 if "analysis_result" not in st.session_state:
     st.session_state.analysis_result = None
