@@ -1,20 +1,36 @@
 import os
 import time
-import urllib.request
-import json
+import requests
 import duckdb
 import pandas as pd
+from fastapi import FastAPI, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 # ==========================================
-# 1. CORE ENGINE & NATIVE INDICATORS
+# 1. INITIALIZE FASTAPI & WEB SYSTEM BRIDGE
 # ==========================================
-class MobileTerminalApp:
+app = FastAPI(title="Unified Scalper Engine")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ==========================================
+# 2. CORE BACKEND ARCHITECTURE MACHINERY
+# ==========================================
+class UnifiedScalperEngine:
     def __init__(self, db_path="app_warehouse.db"):
         self.conn = duckdb.connect(db_path)
+        self.simulation_speed = 0.05 
+        self.is_running = False
         self.create_tables()
         
     def create_tables(self):
-        """Creates storage using your active DuckDB database engine."""
+        """Creates time-series storage and execution tracking tables inside DuckDB."""
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS market_data (
                 timestamp TIMESTAMP PRIMARY KEY,
@@ -35,136 +51,137 @@ class MobileTerminalApp:
             pass
 
     def calculate_native_indicators(self, df):
-        """Pure math processing layer using native Pandas analytics."""
-        # Bollinger Bands (20 Period, 2 Standard Deviations)
+        """
+        Pure math engine. Calculates RSI and Bollinger Bands directly 
+        using native pandas functions to prevent server build crashes.
+        """
+        # Bollinger Bands Math (20 Period, 2 Standard Deviations)
         df['bb_middle'] = df['close'].rolling(window=20).mean()
         rolling_std = df['close'].rolling(window=20).std()
         df['bb_upper'] = df['bb_middle'] + (rolling_std * 2)
         df['bb_lower'] = df['bb_middle'] - (rolling_std * 2)
 
-        # RSI Momentum (14 Period)
+        # RSI Math (14 Period Momentum)
         change = df['close'].diff()
         gain = change.mask(change < 0, 0)
         loss = -change.mask(change > 0, 0)
+        
         avg_gain = gain.ewm(com=13, adjust=False).mean()
         avg_loss = loss.ewm(com=13, adjust=False).mean()
+        
         rs = avg_gain / avg_loss.replace(0, 0.00001)
         df['rsi'] = 100 - (100 / (1 + rs))
         
-        # Fill placeholders safely
-        df.fillna(method='bfill', inplace=True)
+        # Fill placeholder rows safely
+        df['rsi'] = df['rsi'].fillna(50)
+        df['bb_middle'] = df['bb_middle'].fillna(df['close'])
+        df['bb_upper'] = df['bb_upper'].fillna(df['close'])
+        df['bb_lower'] = df['bb_lower'].fillna(df['close'])
+        
         return df
 
-    def one_click_download(self, pair="BTCUSDT"):
-        """Downloads historical charts via built-in system network modules."""
-        print(f"🌐 Fetching {pair} 1-minute historical nodes...")
-        url = f"https://binance.com{pair}&interval=1m&limit=150"
+    def download_and_store_data(self, pair: str):
+        """One-Click Downloader: Pulls raw data, calculates indicators, and loads database."""
+        url = f"https://binance.com{pair}&interval=1m&limit=500"
+        response = requests.get(url).json()
         
-        # Pull data natively without requiring the 'requests' library
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req) as response:
-            raw_json = json.loads(response.read().decode())
-            
         data = []
-        for row in raw_json:
+        for row in response:
             data.append({
                 'timestamp': pd.to_datetime(row[0], unit='ms'),
                 'open': float(row[1]), 'high': float(row[2]),
                 'low': float(row[3]), 'close': float(row[4]), 'volume': float(row[5])
             })
-            
+        
         df = pd.DataFrame(data)
         df = self.calculate_native_indicators(df)
         
-        # Save straight to local embedded DuckDB warehouse
+        # Save straight to local embedded DuckDB database file
         self.conn.register('temp_df', df)
         self.conn.execute("INSERT OR REPLACE INTO market_data SELECT * FROM temp_df")
-        print("💾 Storage finalized. Data locked into database successfully.\n")
+        print(f"📊 {pair} data and metrics stored successfully using native engines.")
 
-    def run_animated_backtest(self, simulation_speed=0.2):
-        """Runs the loop, drawing moving candles and trading stats in real-time."""
+    def run_simulation_loop(self, speed: float, risk_pct: float, balance: float):
+        """Bar-by-Bar Scalper execution engine loop."""
+        self.simulation_speed = speed
+        self.is_running = True
+        
         candles = self.conn.execute("SELECT * FROM market_data ORDER BY timestamp ASC").df()
-        self.conn.execute("DELETE FROM trade_logs")
-        
         contract_size = 100000
-        spread_friction = 1.0 * 0.0001
+        spread_slippage_friction = 1.5 * 0.0001 
         
-        print("▶️ Booting Automated Scalper Core...")
-        time.sleep(1)
+        self.conn.execute("DELETE FROM trade_logs")
 
         for i in range(len(candles)):
+            if not self.is_running:
+                break
+                
             candle = candles.iloc[i].to_dict()
             
-            # 1. Evaluate Open Trades
-            open_trades = self.conn.execute("SELECT * FROM trade_logs WHERE status='OPEN'").df()
-            if not open_trades.empty:
-                for idx, pos in open_trades.iterrows():
-                    if candle['high'] >= (pos['entry_price'] + 0.0015):
+            # A. Evaluate active open positions first
+            open_positions = self.conn.execute("SELECT * FROM trade_logs WHERE status='OPEN'").df()
+            if not open_positions.empty:
+                for idx, pos in open_positions.iterrows():
+                    if candle['high'] >= (pos['entry_price'] + 0.0015): 
                         pnl = 0.0015 * pos['lot_size'] * contract_size
                         self.conn.execute("UPDATE trade_logs SET status='CLOSED', exit_price=?, pnl=? WHERE id=?", 
                                           (pos['entry_price'] + 0.0015, pnl, pos['id']))
-                    elif candle['low'] <= (pos['entry_price'] - 0.0010):
+                    elif candle['low'] <= (pos['entry_price'] - 0.0010): 
                         pnl = -0.0010 * pos['lot_size'] * contract_size
                         self.conn.execute("UPDATE trade_logs SET status='CLOSED', exit_price=?, pnl=? WHERE id=?", 
                                           (pos['entry_price'] - 0.0010, pnl, pos['id']))
 
-            # 2. Strategy Rules (Mean Reversion Trigger)
-            has_active = self.conn.execute("SELECT COUNT(*) FROM trade_logs WHERE status='OPEN'").fetchone()[0]
-            if has_active == 0:
-                if candle['close'] <= candle['bb_lower'] and candle['rsi'] <= 35:
-                    reason = f"Price (${candle['close']:.2f}) broke Bollinger Floor (${candle['bb_lower']:.2f}) at RSI ({candle['rsi']:.1f})."
-                    fill = candle['open'] + spread_friction
+            # B. Strategy evaluation entry checks
+            has_active_trade = self.conn.execute("SELECT COUNT(*) FROM trade_logs WHERE status='OPEN'").fetchone()[0]
+            if has_active_trade == 0:
+                if candle['close'] <= candle['bb_lower'] and candle['rsi'] <= 35: 
+                    reason_desc = f"Price (${candle['close']:.2f}) pierced lower band (${candle['bb_lower']:.2f}) at oversold RSI ({candle['rsi']:.1f}). Buying reversion."
+                    fill_price = candle['open'] + spread_slippage_friction
+                    
                     self.conn.execute("""
                         INSERT INTO trade_logs (direction, lot_size, entry_price, status, reason, pnl) 
                         VALUES ('BUY', 0.1, ?, 'OPEN', ?, 0.0)
-                    """, (fill, reason))
+                    """, (fill_price, reason_desc))
 
-            # 3. RENDER THE LIVE DASHBOARD ON YOUR PHONE SCREEN
-            # Clear terminal window for crisp frame refresh animation
-            os.system('clear' if os.name == 'posix' else 'cls')
+            time.sleep(self.simulation_speed)
             
-            # Fetch updated metrics
-            closed_trades = self.conn.execute("SELECT * FROM trade_logs WHERE status='CLOSED'").df()
-            total_t = len(closed_trades)
-            wins = len(closed_trades[closed_trades['pnl'] > 0]) if total_t > 0 else 0
-            win_rate = (wins / total_t * 100) if total_t > 0 else 0.0
-            net_pnl = closed_trades['pnl'].sum() if total_t > 0 else 0.0
-            
-            # Output Screen Panel
-            print("=============================================================")
-            print(f"📊 LIVE MOVING CANDLES GRAPH TERMINAL  |  SPEED: {simulation_speed}s")
-            print("=============================================================")
-            print(f" TIME:  {candle['timestamp']}")
-            print(f" PRICE: ${candle['close']:.2f} | BB-MID: ${candle['bb_middle']:.2f}")
-            print(f" RSI:   [{'#' * int(candle['rsi']/5)}{'-' * (20 - int(candle['rsi']/5))}] ({candle['rsi']:.1f})")
-            print("=============================================================")
-            print("📈 TRADER STATISTICS TABLE")
-            print("-------------------------------------------------------------")
-            print(f" Total Trades: {total_t:<6} | Win Rate: {win_rate:.1f}% | Net Profit: ${net_pnl:.2f}")
-            print("=============================================================")
-            print("📜 ACTIVE RECENT TRADE EXPLANATIONS LOGS")
-            print("-------------------------------------------------------------")
-            
-            all_trades = self.conn.execute("SELECT direction, pnl, reason FROM trade_logs ORDER BY id DESC LIMIT 3").fetchall()
-            for t in all_trades:
-                print(f" -> [{t[0]}] PnL: ${t[1]:.2f} | Reason: {t[2]}")
-            print("=============================================================")
-            
-            # Controls animation cadence frame rate
-            time.sleep(simulation_speed)
+        self.is_running = False
+
+backend_system = UnifiedScalperEngine()
 
 # ==========================================
-# 4. ONE-CLICK INITIALIZATION RUNNER
+# 3. INTERACTIVE WEB ENDPOINT ROUTES (APIs)
 # ==========================================
-if __name__ == "__main__":
-    app = MobileTerminalApp()
+class ConfigSchema(BaseModel):
+    pair: str
+    speed: float
+    risk: float
+    funds: float
+
+@app.post("/api/download")
+def download(pair: str):
+    backend_system.download_and_store_data(pair)
+    return {"message": "Downloaded"}
+
+@app.post("/api/start")
+def start(config: ConfigSchema, tasks: BackgroundTasks):
+    if not backend_system.is_running:
+        tasks.add_task(backend_system.run_simulation_loop, speed=config.speed, risk=config.risk, balance=config.funds)
+        return {"status": "running"}
+    return {"status": "already_running"}
+
+@app.get("/api/dashboard")
+def dashboard():
+    trades = backend_system.conn.execute("SELECT * FROM trade_logs ORDER BY id DESC").df().to_dict(orient="records")
+    closed = [t for t in trades if t['status'] == 'CLOSED']
     
-    # Action 1: Automated download & store data framework execution
-    app.one_click_download("BTCUSDT")
+    total = len(closed)
+    wins = len([t for t in closed if t['pnl'] > 0])
+    win_rate = (wins / total * 100) if total > 0 else 0.0
+    net_pnl = sum([t['pnl'] for t in closed])
     
-    # Action 2: Change this number to control how fast the simulation ticks (e.g., 0.05 is fast, 0.5 is slow)
-    USER_SPEED_SETTING = 0.1 
+    return {
+        "stats": {"total_trades": total, "win_rate_pct": round(win_rate, 2), "net_pnl": round(net_pnl, 2)},
+        "all_logs": trades
+    }
     
-    # Action 3: Boot the active engine loop mapping dashboard onto your screen
-    app.run_animated_backtest(simulation_speed=USER_SPEED_SETTING)
-      
